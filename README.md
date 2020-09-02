@@ -61,7 +61,8 @@ Spring Quartz 는 스케줄러 역할으로, Batch와 같은 대용량 데이터
 > 이외에도 정해진 시간마다 데이터 가공이 필요한 경우 Spring Batch가 자주 사용된다
 
 
-##### Spring Batch 프로젝트
+---
+### Spring Batch 프로젝트
 
 ![Spring Batch 구조](https://t1.daumcdn.net/cfile/tistory/99E8E3425B66BA2713)
 
@@ -230,9 +231,224 @@ public Job deciderJob() {
 분기 로직에 대한 모든 일을 OddDecider가 전담하고 있어서 Step과 명확히 역할, 책임이 분리된다.
 
 
+##### Job Parameter와 Scope
+
+> `@StepScope`, `@JobScope` 와 Job Parameter 에 대한 내용
+
+Spring Batch의 경우 외부, 내부에서 파라미터를 받아 여러 Batch 컴포넌트에서 사용할 수 있게 지원된다.
+이 파라미터를 Job Parameter라고 한다. Job Parameter를 사용하기 위해선 항상 Spring Batch 전용 Scope를 선언해야만 한다.
+크게 2가지 스코프가 있다.
+
+- `@StepScope`
+- `@JobScope`
+
+```java
+// 사용법 (SpEL)
+@Value("#{jobParameters[파라미터명]}")
+```
+
+> jobParmeters 외에도 jobExecutionContext, stepExecutionContext 도 SpEL로 사용가능하다. @JobScope에선 stepExecutionContext는 사용할 수 없고, jobParameters와 jobExecutionContext만 사용할 수 있다.
+
+- JobScope
+
+```java
+@Bean
+public Job simpleJob() {
+    return jobBuilderFactory.get("simpleJob")
+            .start(simpleStep1(null))
+            .next(simpleStep2(null))
+            .build();
+}
+
+@Bean
+@JobScope
+public Step simpleStep1(@Value("#{jobParameters[requestDate]}")String requestDate) {
+    return stepBuilderFactory.get("simpleStep1")
+            .tasklet(((contribution, chunkContext) -> {
+                log.info(">>>>>> This is Step1");
+                log.info(">>>>>> requestDate = {}", requestDate);
+                return RepeatStatus.FINISHED;
+            }))
+            .build();
+}
+```
+
+- StepScope
+
+```java
+@Bean
+public Step scopeStep2() {
+    return stepBuilderFactory.get("scopeStep2")
+            .tasklet(scopeStep2Tasklet(null))
+            .build();
+}
+
+@Bean
+@StepScope
+public Tasklet scopeStep2Tasklet(@Value("#{jobParameters[requestDate]}") String requestDate) {
+    return (contribution, chunkContext) -> {
+        log.info(">>>>> This is scopeStep2");
+        log.info(">>>>>> requestDate = {}", requestDate);
+        return RepeatStatus.FINISHED;
+    }
+}
+```
+
+예제 코드에서 호출하는 쪽에서 null을 할당하는데 Job Parameter의 할당이 어플리케이션 실행시에 하지 않기 때문에 가능하다.
+
+##### `@StepScope`와 `@JobScope`
+
+Spring Bean의 기본 Scope는 singleton이다. 생
+하지만 `@StepScope`를 사용하게 되면 Spring Batch가 Spring 컨테이너를 통해 지정된 Step의 실행지점에 해당 컴포넌트를 Spring Bean으로 생성한다.
+(`@JobScope`은 Job 실행지점에 Bean이 생성된다) 즉, Bean의 생성 시점을 지정된 Scope가 실행되는 시점으로 지연시킨다.
+
+> MVC의 request scope와 비슷하다. request scope가 request가 왔을 때 생성되고, response를 반환하면 삭제되는 것 처럼, JobScope, StepScope 역시 Job이 실행되고 끝날때, Step이 실행되고 끝날때 생성/삭제가 이루어진다.
 
 
+Bean의 생성시점을 Step, Job의 실행시점으로 지연시키면 2가지 장점이 있다.
 
+- JobParameter의 Late Binding이 가능하다
+
+Job Parameter가 StepContext 또는 JobExecutionContext 레벨에서 할당시킬 수 있다. 꼭 Application이 실행되는 시점이 아니더라도 Controller나 Service와 같은 비즈니스 로직 처리 단계에서 Job Parameter를 할당시킬 수 있다.
+
+- 동일한 컴포넌트를 병렬 혹은 동시에 사용할 때 유용하다
+
+Step안에 Tasklet이 있고, Tasklet은 멤버 변수와 이 멤버 변수를 변경하는 로직이 있다고 할때, 
+`@StepScope` 없이 Step을 병렬로 실행시키게 되면 서로 다른 Step에서 하나의 Tasklet을 두고 상태를 변경하려 할것이다.
+하지만 `@StepScope`가 있으면 Step에서 별도의 Tasklet을 생성하고 관리하기 때문에 서로의 상태를 침범하지 않는다.
+
+
+##### Job Parameter 생성 
+
+Job Parameters는 `@Value`를 통해서 가능하다. Job Parameters는 Step이나, Tasklet, Reader 등 Batch 컴포넌트 Bean의 생성 시점에 호출할 수 있다. (정확히는 Scope Bean을 생성할때만 가능)\
+즉, `@StepScope`, `@JobScope` Bean을 생성할때만 Job Parameters가 생성되기 때문에 사용할 수 있다.
+
+```java
+// @Bean과 @Value("#{jobParameters[파라미터]}") 제
+@Bean
+public Job simpleJob() {
+    log.info(">>>>> definition simpleJob");
+    return jobBuilderFactory.get("simpleJob")
+            .start(simpleStep1())
+            .next(simpleStep2(null))
+            .build();
+}
+
+private final SimpleJobTasklet tasklet1;    // 생성자 DI
+
+public Step simpleStep1() {
+    log.info(">>>>> definition simpleStep1");
+    return stepBuilderFactory.get("simpleStep1")
+            .tasklet(tasklet1)
+            .build();
+}
+```
+
+```java
+// SimpleJobTasklet 생성 
+@Slf5j
+@Component
+@StepScope  // StepScope Bean
+public class SimpleJobTasklet implements Tasklet {
+    @Value("#{jobParameters[requestDate]}")
+    private String requestDate;
+
+    public SimpleJobTasklet() { log.info(">>>>> tasklet 생성"); }
+
+    @Override
+    public RepeatStatus execute(StepContribution contribution, ChunkContext chunkContext) throws Exception {
+        log.info(">>>>> This is Step1");
+        log.info(">>>>> requestDate = {}", requestDate);
+        return RepeatStatus.FINISHED;
+    }
+}
+```
+
+
+##### Job Parameter vs. 시스템 변수
+
+- Job Parameter
+
+```java
+@Bean
+@StepScope
+public FlatFileItemReader<Partner> reader(@Value("#{jobParameters[pathToFile]}") String pathToFile) {
+    FlatFileItemReader<Partner> itemReader = new FlatFileItemReader<Partner>();
+    itemReader.setLineMapper(lineMapper());
+    itemReader.setResource(new ClassPathResource(pathToFile));
+    return itemReader;
+}
+```
+
+- 시스템 변수 (application.properties와 -D 옵션으로 실행하는 변수)
+
+```java
+@Bean
+@ConfigurationProperties(prefix = "my.prefix")
+protected class JobProperties {
+
+    String pathToFile;
+
+    ...getters/setters
+}
+
+@Autowired
+private JobProperties jobProperties;
+
+@Bean
+public FlatFileItemReader<Partner> reader() {
+    FlatFileItemReader<Partner> itemReader = new FlatFileItemReader<Partner>();
+    itemReader.setLineMapper(lineMapper());
+    String pathToFile = jobProperties.getPathToFile();
+    itemReader.setResource(new ClassPathResource(pathToFile));
+    return itemReader;
+}
+```
+
+시스템 변수를 사용하는 경우 Spring Batch의 Job Parameter 관련 기능을 사용할 수 없다. (예를 들어 Job Parameter가 같은 Job을 두번 실행하지 않는 것)
+또한 Spring Batch에서 자동으로 관리해주는 Parameter 관련 테이블이 전혀 관리되지 않는다.
+
+그리고 Command line 외의 방법으로 Job을 실행하기 어렵다. 전역상태(시스템 변수, 환경변수)를 동적으로 변경시킬 수 있도록 Spring Batch를 구성해야 한다.
+
+> Job Parameter를 못쓰면 Late Binding을 못하게 된다.
+
+
+```java
+// Job Parameter 활용
+@Slf4j
+@RequiredArgsConstructor
+@RestController
+public class JobLauncherController {
+
+    private final JobLauncher jobLauncher;
+    private final Job job;
+
+    @GetMapping("/launchjob")
+    public String handle(@RequestParam("fileName") String fileName) throws Exception {
+
+        try {
+            // Request Parameter로 받은 값을 Job Parameter로 생성
+            JobParameters jobParameters = new JobParametersBuilder()
+                                    .addString("input.file.name", fileName)
+                                    .addLong("time", System.currentTimeMillis())
+                                    .toJobParameters();
+            // Job PArameter로 Job을 수행
+            jobLauncher.run(job, jobParameters);
+        } catch (Exception e) {
+            log.info(e.getMessage());
+        }
+
+        return "Done";
+    }
+}
+```
+
+> 개발자가 원하는 어느 시점에든 Job Parameter를 생성하고 수행할 수 있다. Job Parameter를 각 Batch 컴포넌트들이 사용하면 되기 때문에 변경이 심한 경우에도 쉽게 대응할 수 있다.
+> (위 예제는 예제일 뿐 웹서버에서 Batch를 관리하는 것은 권장되지 않는다)
+
+`@Bean`과 `@StepScope`를 함쎄 쓰는 것은 `@Scope (value = "step", proxyMode = TARGET_CLASS)`와 같고, proxyMode로 인해서 문제가 발생할 수 있다.
+
+[@StepScope 사용시 주의사항](http://jojoldu.tistory.com/132)
 
 
 ---
