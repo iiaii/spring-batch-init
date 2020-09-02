@@ -10,6 +10,7 @@ import org.springframework.batch.core.configuration.annotation.JobBuilderFactory
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
 import org.springframework.batch.core.job.flow.FlowExecutionStatus;
 import org.springframework.batch.core.job.flow.JobExecutionDecider;
+import org.springframework.batch.core.step.item.ChunkOrientedTasklet;
 import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -38,7 +39,7 @@ public class DeciderJobConfiguration {
                 .end()                  // builder 종료
                 .build();
     }
-
+ChunkOrientedTasklet
     @Bean
     public Step startStep() {
         return stepBuilderFactory.get("startStep")

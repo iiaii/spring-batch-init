@@ -451,5 +451,126 @@ public class JobLauncherController {
 [@StepScope 사용시 주의사항](http://jojoldu.tistory.com/132)
 
 
+##### Chunk
+
+Spring Batch에서 Chunk란 데이터 덩어리로 작업할 때 각 커밋 사이에 처리되는 row 수를 이야기한다.
+즉, Chunk 지향 처리란 한번에 하나씩 데이터를 읽어 Chunk라는 덩어리를 만든 뒤, Chunk 단위로 트랜잭션을 다루는 것을 의미한다.
+
+Chunk 단위로 트랜잭션을 수행하기 때문에 실패할 경우에 해당 Chunk 만큼 롤백이 되고, 이전에 커밋된 트랜잭션 범위까지는 반영이 된다.
+
+![spring batch chunk](https://t1.daumcdn.net/cfile/tistory/999A513E5B814C4A12)
+
+
+- Reader에서 데이터를 하나 읽어온다
+- 읽어온 데이터를 Processor에서 가공한다
+- 가공된 데이터들을 별도의 공간에 모은 뒤, Chunk 단위만큼 쌓이게 되면 Writer에 전달하고 Writer는 일괄 저장한다
+
+**Reader와 Processor에서는 1건씩 다뤄지고, Writer에선 Chunk 단위로 처리된다**
+
+```java
+// Chunk 지향 처리
+for(int i=0; i<totalSize; i+=chunkSize){ // chunkSize 단위로 묶어서 처리
+    List items = new Arraylist();
+    for(int j = 0; j < chunkSize; j++){
+        Object item = itemReader.read()
+        Object processedItem = itemProcessor.process(item);
+        items.add(processedItem);
+    }
+    itemWriter.write(items);
+}
+```
+
+
+##### ChunkOrientedTasklet
+
+Chunk 지향 처리의 전체 로직을 다루는 것은 `ChunkOrientedTasklet` 클래스이다.
+
+해당 클래스의 `execute()`를 보면 Chunk 단위로 작업하기 위한 전체 코드가 있다. 
+
+- `chunkProvider.provide()` 로 Reader에서 Chunk size 만큼 데이터를 가져온다(read)
+- `chunkProcessor.process()` 에서 Reader로 받은 데이터를 가공(process)하고 저장(write)한다
+
+![chunkProvider.provide()](https://t1.daumcdn.net/cfile/tistory/9969C3335B814C4D2A) 
+
+`chunkProvider.provide()`는 inputs이 ChunkSize 만큼 쌓일때까지 read()를 호출한다.
+read() 내부에서는 doRead()라는 메서드를 호출하는데, ItemReader.read에서 1건씩 데이터를 조회해 Chunk Size 만큼 데이터를 쌓는 것이 `provide()`가 하는 일이다.
+
+
+##### SimpleChunkProcessor
+
+Processor와 Writer 로직을 담고 있는 것은 `ChunkProcessor`가 담당한다. 인터페이스이기 때문에 기본적으로 사용되는 구현체가 `SimpleChunkProcessor`이다.
+
+- `process()`
+
+![process](https://t1.daumcdn.net/cfile/tistory/99DE13375B814C4C36)
+
+transform() 은 반복문을 통해 doProcess() 를 호출한다. 가공된 데이터들은 doWriter()를 통해 일괄처리된다.
+
+
+##### Page Size vs Chunk Size
+
+- Chunk Size : 한번에 처리될 트랜잭션 단위
+- Page Size : 한번에 조회할 Item의 양
+
+즉 Page Size는 Page 단위로 끊어서 조회하는 것이고, 페이징 쿼리에서 Page Size를 지정하기 위한 값이다.
+
+> PageSize가 10이고, ChunkSize가 50이라면 ItemReader에서 Page 조회가 5번 일어나면 1번의 트랜잭션이 발생하여 Chunk가 처리된다.
+
+한번의 트랜잭션 처리를 위해 5번의 쿼리 조회가 발생하기 때문에 성능상 이슈가 발생할 수 있다. 
+그래서 큰 페이지 크기를 설정하고 페이지 크기와 일치하는 커밋 간격으로 사용할 것을 권장한다.
+즉, 2개의 값을 일치시키는 것이 보편적으로 좋은 방법이다.
+
+
+##### ItemReader
+
+Spring Batch는 Chunk 지향처리를 하며 이를 Job과 Stepp으로 구성하였다. Step은 Tasklet 단위로 처리되고, 를
+Tasklet 중에서 ChunkOrientedTasklet을 통해 Chunk를 처리하며 이를 구성하는 3요소로 ItemReader, ItemWriter, ItemProcessor가 있다.
+
+> ItemReader & ItemProcessor & ItemWriter 묶음 역시 Tasklet이다. (묶음을 ChunkOrientedTasklet에서 관리함)
+
+![Spring batch ItemReader](https://t1.daumcdn.net/cfile/tistory/992DD04D5CEB519E20)
+
+Spring Batch의 Chunk Tasklet은 위와 같은 과정으로 진행된다.
+
+- ItemReader : 데이터를 읽어들인다. DB의 데이터만을 이야기하는 것이 아니라 입력 데이터, 파일, DB 외에도 다른 소스에서 읽어온다.
+
+Item Reader의 종류와 사용방법 모두 상이한데 [ItemReader](https://jojoldu.tistory.com/336?category=902551)를 참고하자.
+(ItemReader는 Spring Batch를 구현하는데 있어 중요한 구현체이다. 어디서 데이터를 읽고 어떤 방식으로 읽느냐에 따라 성능이 달라진다)
+
+
+##### ItemWriter
+
+(Processor는 필수가 아닌 선택이다.) ItemWriter는 Spring Batch에서 사용하는 출력 기능이다. 
+
+Chunk 프로세스를 복기하자면
+
+- ItemReader를 통해 각 항목을 개별적으로 읽고 이를 처리하기 위해 ItemProcessor에 전달한다
+- 이 프로세스는 청크의 Item 개수 만큼 처리될 때까지 계속된다
+- 청크 단위만큼 처리가 완료되면 Writer에 전달되어 Writer에 명시되어 있는대로 일괄처리한다
+
+> Reader와 Processor를 거쳐 처리된 Item을 Chunk 단위 만큼 쌓은 뒤 이를 Writer에 전달한다
+
+ItemWriter의 종류와 사용방법 모두 상이한데 [ItemWriter](https://jojoldu.tistory.com/339?category=902551)를 참고하자.
+
+
+##### ItemProcessor
+
+ItemProcessor는 필수 구성요소가 아니며 Writer에서도 충분히 구현 가능하다. 하지만 ItemProcessor를 사용하면 비즈니스 코드가 섞이는 것을 방지해준다.
+
+ItemProcessor는 Reader에서 넘겨준 데이터 개별건을 가공/처리 한다. 일반적으로 ItemProcessor를 사용하는 방법은 2가지이다.
+
+- 변환 
+
+Reader에서 읽은 데이터를 원하는 타입으로 변환
+
+- 필터
+
+Reader에서 넘겨준 데이터를 Writer로 넘겨줄 것인지 결정 (null을 반환하면 Writer에 전달되지 않는다) 
+
+> 마치 Stream의 map,filter 같음
+
+
+자세한 내용은 [ItemProcessor](https://jojoldu.tistory.com/347?category=902551) 참고.
+
 ---
 [jojoldu | Spring Batch 가이드](https://jojoldu.tistory.com/324)
