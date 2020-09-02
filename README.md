@@ -75,6 +75,165 @@ Tasklet 하나와 Reader & Processor & Writer 한 묶음이 같은 레벨이다.
 
 
 
+##### 메타 테이블
+
+- BATCH_JOB_INSTANCE
+
+Job Parameter에 따라 생성되는 테이블이다. 
+Spring Batch가 실행될때 외부에서 받을 수 있는 파라미터인 Job Parameter를 통해 해당 날짜 데이터로 조회/가공/입력 등의 작업을 할 수 있다.
+
+![job instance](https://t1.daumcdn.net/cfile/tistory/992174475B66D86811)
+
+BATCH_JOB_INSTANCE 테이블에 동일한 Job이 Job Parameter가 달라지면 생성되고, 동일한 Job Parameter는 여러개 존재할 수 없다. (마치 set 같고 instance 처럼 생성됨)
+
+
+- BATCH_JOB_EXECUTION
+
+JOB_EXECUTION 과 JOB_INSTANCE 는 부모-자식 관계이다. JOB_INSTANCE가 성공/실패했던 모든 내역을 가지고 있다.
+
+![job execution](https://t1.daumcdn.net/cfile/tistory/99F6D73C5B66D8681D)
+
+또한 동일한 Job Parameter로 2번 실행했지만, 같은 파라미터 실행 오류가 발생하지 않았다. 즉, Spring Batch는 동일한 Job Parameter로 성공한 기록이 있을 경우에만 재수행이 안된다.
+
+
+![job](https://t1.daumcdn.net/cfile/tistory/995743415B66D86825)
+
+(job = spring batch job)
+
+
+##### next
+
+```java
+@Bean
+public Job stepNextJob() {
+    return jobBuilderFactory.get("stepNextJob")
+            .start(step1())
+            .next(step2())
+            .next(step3())
+            .build();
+}
+```
+
+`next()`는 순차적으로 Step들을 연결시킬때 사용된다. (순차적 실행)
+
+application.yml 에 `spring.batch.job.names: ${job.name:NONE}`을 추가하고 아래와 같이 설정하면 지정한 이름의 배치만 실행된다.
+
+![job.name](https://t1.daumcdn.net/cfile/tistory/993049425B6FC6BB20)
+
+
+##### Job flow
+
+Step은 앞에서 오류가 나면 뒤에 있는 Step들은 실행되지 못한다. 하지만 Step에 오류가 있을 때 분기되어 실행되야 하는 경우가 있다.
+이러한 경우에 Spring Batch Job에서는 조건별로 Step을 사용할 수 있다.
+
+```java
+@Bean
+public Job stepNextConditionalJob() {
+    return jobBuilderFactory.get("stepNextConditionalJob")
+            .start(conditionalJobStep1())
+                .on("FAILED") // FAILED 일 경우
+                .to(conditionalJobStep3()) // step3으로 이동한다.
+                .on("*") // step3의 결과 관계 없이 
+                .end() // step3으로 이동하면 Flow가 종료한다.
+            .from(conditionalJobStep1()) // step1로부터
+                .on("*") // FAILED 외에 모든 경우
+                .to(conditionalJobStep2()) // step2로 이동한다.
+                .next(conditionalJobStep3()) // step2가 정상 종료되면 step3으로 이동한다.
+                .on("*") // step3의 결과 관계 없이 
+                .end() // step3으로 이동하면 Flow가 종료한다.
+            .end() // Job 종료
+            .build();
+}
+```
+
+- `on()`
+
+캐치할 ExitStatus 지정 (`*`는 모든 ExitStatus 지정)
+
+- `to()`
+
+다음으로 이동할 Step 지정
+
+- `from()`
+
+일종의 이벤트 리스너로 상태값을 보고 일치하는 상태라면 `to()`에 포함된 step을 호출한다 (step1의 이벤트 캐치가 FAILED로 되어있는 상태에서 추가로 이벤트 캐치하려면 `from` 사용해야 함)
+
+- `end()`
+
+FlowBuilder를 반환하는 end와 FlowBuilder를 종료하는 end 2개가 있다. `on("*")` 뒤에 있는 end는 FlowBuilder를 반환하는 end, `build()` 앞에 있는 end는 FlowBuilder를 종료하는 end. 
+FlowBuilder를 반환하는 end 사용시 계속해서 `from`을 이어갈 수 있다
+
+`contribution.setExitStatus(ExitStatus.FAILED);`와 같이 분기 처리를 위한 상태값 조정을 통해 제어가능하다. (값을 세팅하면 해당 분기를 타고 실행)
+
+
+##### Batch Status vs. Exit Status
+
+BatchStatus는 Job 또는 Step의 실행 결과를 Spring에서 기록할 때 사용하는 Enum이다. (COMPLETED, STARTING, STARTED, STOPPING, STOPPED, FAILED, ABANDONED, UNKNOWN)
+
+```java
+.on("FAILED").to(stepB())
+```
+
+> `on` 메소드가 참조하는 것은 BatchStatus가 아닌 Step의 ExitStatus이다
+ 
+ExitStatus는 Step의 실행 후 상태를 뜻한다. (ExitStatus는 Enum이 아님)
+
+따라서 위 구문은 exitCode가 FAILED로 끝나면 StepB로 가라는 의미이다.
+
+기본적으로 ExitStatus의 exitCode는 Step의 BatchStatus와 동일하다. 커스텀한 코드도 설정 가능하다.
+
+```java
+// 커스텀 exitCode
+public class SkipCheckingListener extends StepExecutionListenerSupport {
+
+    public ExitStatus afterStep(StepExecution stepExecution) {
+        String exitCode = stepExecution.getExitStatus().getExitCode();
+        if (!exitCode.equals(ExitStatus.FAILED.getExitCode()) && 
+              stepExecution.getSkipCount() > 0) {
+            return new ExitStatus("COMPLETED WITH SKIPS");
+        }
+        else {
+            return null;
+        }
+    }
+}
+```
+
+
+##### Decide
+
+
+Step flow 분기 처리에는 2가지 문제가 있다. 
+
+- Step이 담당하는 역할이 2개 이상된다 (실제 해당 Step이 처리해야할 로직외에도 분기처리를 시키기 위해 ExitStatus 조작이 필요함)
+- 다양한 분기 로직 처리가 어렵다 (ExitStatus를 커스텀하게 고치기 위해서 Listener를 생성하고 JobFlow에 등록해야 함)
+
+그래서 Spring Batch 에는 Step들의 Flow 속에서 분기만 담당하는 `JobExecutionDecider` 타입이 있다.
+
+```java
+@Bean
+public Job deciderJob() {
+    return jobBuilderFactory.get("deciderJob")
+            .start(startStep())
+            .next(decider())        // 홀수 | 짝수 구분
+            .from(decider())        // decider의 상태가
+                .on("ODD")          // ODD라면
+                .to(oddStep())      // oddStep로 간다
+            .from(decider())        // decider의 상태가
+                .on("EVEN")         // EVEN이라면
+                .to(evenStep())     // evenStep으로 간다
+            .end()                  // builder 종료
+            .build();
+}
+```
+
+분기 로직에 대한 모든 일을 OddDecider가 전담하고 있어서 Step과 명확히 역할, 책임이 분리된다.
+
+
+
+
+
+
 
 ---
 [jojoldu | Spring Batch 가이드](https://jojoldu.tistory.com/324)
