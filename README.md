@@ -298,7 +298,7 @@ public Tasklet scopeStep2Tasklet(@Value("#{jobParameters[requestDate]}") String 
 
 ##### `@StepScope`와 `@JobScope`
 
-Spring Bean의 기본 Scope는 singleton이다. 생
+Spring Bean의 기본 Scope는 singleton이다.
 하지만 `@StepScope`를 사용하게 되면 Spring Batch가 Spring 컨테이너를 통해 지정된 Step의 실행지점에 해당 컴포넌트를 Spring Bean으로 생성한다.
 (`@JobScope`은 Job 실행지점에 Bean이 생성된다) 즉, Bean의 생성 시점을 지정된 Scope가 실행되는 시점으로 지연시킨다.
 
