@@ -521,6 +521,15 @@ transform() 은 반복문을 통해 doProcess() 를 호출한다. 가공된 데�
 즉, 2개의 값을 일치시키는 것이 보편적으로 좋은 방법이다.
 
 
+### Batch 흐름
+
+Spring Batch는 Reader -> Processor -> Writer `Step` 흐름으로 진행된다. 이 실행 묶음이 하나의 Job 단위가 되고 Reader, Processor, Writer 가 하나의 Step으로 구분 지을 수 있다. 
+즉, Job은 배치 처리 과정을 하나의 단위로 만들어 표현한 것이고, 하나의 Job은 상위에서 Step으로 표현될 수 있다. (Job 객체는 여러 Step 인스턴스를 포함하는 컨테이너이다)
+Step 은 실질적인 배치 처리를 정의하고 제어하는데 필요한 모든 정보가 있는 도메인 객체이다. 모든 Job에는 1개 이상의 Step이 있어야하고, 각 Job은 연결되지 않으며 독립적으로 실행되지만 실행 순서를 가진다.
+만약 Job 들 간의 공유해야할 데이터가 있다면, `JobSharedDataStore<>`나 컬렉션을 통해 공유할 수 있다. Job을 생성할 때에는 묶음으로 실행되어야할 데이터들의 transactionManager를 지정하며, Chunk를 지정한다.
+
+
+
 ##### ItemReader
 
 Spring Batch는 Chunk 지향처리를 하며 이를 Job과 Stepp으로 구성하였다. Step은 Tasklet 단위로 처리되고, 를
@@ -536,6 +545,8 @@ Spring Batch의 Chunk Tasklet은 위와 같은 과정으로 진행된다.
 
 Item Reader의 종류와 사용방법 모두 상이한데 [ItemReader](https://jojoldu.tistory.com/336?category=902551)를 참고하자.
 (ItemReader는 Spring Batch를 구현하는데 있어 중요한 구현체이다. 어디서 데이터를 읽고 어떤 방식으로 읽느냐에 따라 성능이 달라진다)
+
+> `JpaPagingItemReader`는 entityManagerFactory를 지정해주어야 한다. 각 Step에 맞는 entityManagerFactory를 지정하자 (이것 때문에 삽질함)
 
 
 ##### ItemWriter
