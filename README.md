@@ -36,6 +36,7 @@ Spring Batch는 배치 어플리케이션을 보다 쉽고 안정적으로 구�
 
 Spring Quartz 는 스케줄러 역할으로, Batch와 같은 대용량 데이터 배치 처리에 대한 기능을 지원하지 않는다. Batch 역시 Quartz의 다양한 스케줄 기능을 지원하지 않아서 보통 둘을 조합해서 사용한다. (정해진 스케줄마다 Quartz가 Spring Batch를 실행)
 
+[Quartz cron 표현식](https://github.com/iiaii/memo/blob/master/common/cron-expression.md)
 
 ##### Batch 사례
 
